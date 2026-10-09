@@ -50,35 +50,6 @@ const sendEmail = async ({ to, subject, text }) => {
   return true;
 };
 
-const logDevelopmentOtp = (email, otp) => {
-  console.log('=================================');
-  console.log('FIXNEST DEVELOPMENT OTP');
-  console.log('=================================');
-  console.log(`Email: ${email}`);
-  console.log(`OTP: ${otp}`);
-  console.log('Expires: 5 minutes');
-  console.log('=================================');
-};
-
-const sendOtpEmail = async (email, otp) => {
-  try {
-    await sendEmail({
-      to: email,
-      subject: 'Your Fixnest verification code',
-      text: `Hi,\n\nYour Fixnest verification code is:\n\n${otp}\n\nThis code will expire in 5 minutes.\n\nIf you did not request this code, you can safely ignore this email.\n\nThanks,\nFixnest Team`,
-    });
-    return 'email';
-  } catch (error) {
-    console.error('Error sending email:', error.message);
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('Email delivery failed in development; using the local OTP fallback.');
-      logDevelopmentOtp(email, otp);
-      return 'console';
-    }
-    return false;
-  }
-};
-
 const sendNotificationEmail = async (email, name, subject, message) => {
   try {
     return await sendEmail({
@@ -92,4 +63,4 @@ const sendNotificationEmail = async (email, name, subject, message) => {
   }
 };
 
-module.exports = { sendOtpEmail, sendNotificationEmail };
+module.exports = { sendNotificationEmail };

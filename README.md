@@ -148,9 +148,9 @@ All responses use `{ success, message, data }` on success and `{ success, messag
 7. Run the seed command against Atlas from a trusted local shell. Sign in with the seeded admin account, verify the catalog, add providers, then test a booking.
 8. Test Razorpay with test cards, confirm the order signature is accepted, then switch to live keys only after the complete production booking flow succeeds.
 
-## OTP email on Render
+## Booking email notifications on Render
 
-For Render's free web services, use Resend's HTTPS API because outbound SMTP ports are blocked. Create a Resend API key and verify a sender domain in Resend, then add these backend environment variables in Render:
+Authentication does not use email anymore. For booking notification emails on Render's free web services, use Resend's HTTPS API because outbound SMTP ports are blocked. Create a Resend API key and verify a sender domain in Resend, then add these backend environment variables in Render:
 
 - `RESEND_API_KEY`: the Resend API key (keep it private; never put it in the frontend or source control).
 - `RESEND_FROM_EMAIL`: a sender on the verified domain, for example `Fixnest <no-reply@your-verified-domain.com>`.
