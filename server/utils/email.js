@@ -1,55 +1,78 @@
 const nodemailer = require('nodemailer');
 
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST,
-  port: process.env.SMTP_PORT,
-  connectionTimeout: 7000,
-  greetingTimeout: 7000,
-  socketTimeout: 10000,
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-});
-
-const sendOtpEmail = async (email, otp) => {
-  // Development mode fallback
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER) {
-    if (process.env.NODE_ENV === 'production') {
-      console.error('Cannot send OTP email: SMTP is not configured.');
-      return false;
-    }
-    console.log('=================================');
-    console.log('FIXNEST DEVELOPMENT OTP');
-    console.log('=================================');
-    console.log(`Email: ${email}`);
-    console.log(`OTP: ${otp}`);
-    console.log('Expires: 5 minutes');
-    console.log('=================================');
-    return 'console';
+const sendWithResend = async ({ to, subject, text }) => {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.RESEND_FROM_EMAIL;
+  if (!apiKey || !from) {
+    throw new Error('RESEND_API_KEY and RESEND_FROM_EMAIL must both be configured.');
   }
 
-  const mailOptions = {
-    from: `"Fixnest Team" <${process.env.SMTP_USER}>`,
-    to: email,
-    subject: 'Your Fixnest verification code',
-    text: `Hi,\n\nYour Fixnest verification code is:\n\n${otp}\n\nThis code will expire in 5 minutes.\n\nIf you did not request this code, you can safely ignore this email.\n\nThanks,\nFixnest Team`,
-  };
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ from, to: [to], subject, text }),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(`Resend API ${response.status}: ${result.message || result.name || 'email request failed'}`);
+  }
+  return true;
+};
 
+const sendEmail = async ({ to, subject, text }) => {
+  // Prefer HTTPS email delivery so this works on Render's free plan, which
+  // blocks outbound SMTP ports. SMTP remains available on hosts that permit it.
+  if (process.env.RESEND_API_KEY || process.env.RESEND_FROM_EMAIL) {
+    return sendWithResend({ to, subject, text });
+  }
+
+  if (!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS) {
+    throw new Error('Configure Resend or SMTP email credentials.');
+  }
+
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT) || 587,
+    connectionTimeout: 7000,
+    greetingTimeout: 7000,
+    socketTimeout: 10000,
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+  });
+  await transporter.sendMail({
+    from: `"Fixnest Team" <${process.env.SMTP_USER}>`,
+    to,
+    subject,
+    text,
+  });
+  return true;
+};
+
+const logDevelopmentOtp = (email, otp) => {
+  console.log('=================================');
+  console.log('FIXNEST DEVELOPMENT OTP');
+  console.log('=================================');
+  console.log(`Email: ${email}`);
+  console.log(`OTP: ${otp}`);
+  console.log('Expires: 5 minutes');
+  console.log('=================================');
+};
+
+const sendOtpEmail = async (email, otp) => {
   try {
-    await transporter.sendMail(mailOptions);
+    await sendEmail({
+      to: email,
+      subject: 'Your Fixnest verification code',
+      text: `Hi,\n\nYour Fixnest verification code is:\n\n${otp}\n\nThis code will expire in 5 minutes.\n\nIf you did not request this code, you can safely ignore this email.\n\nThanks,\nFixnest Team`,
+    });
     return 'email';
   } catch (error) {
     console.error('Error sending email:', error.message);
     if (process.env.NODE_ENV !== 'production') {
       console.log('Email delivery failed in development; using the local OTP fallback.');
-      console.log('=================================');
-      console.log('FIXNEST DEVELOPMENT OTP');
-      console.log('=================================');
-      console.log(`Email: ${email}`);
-      console.log(`OTP: ${otp}`);
-      console.log('Expires: 5 minutes');
-      console.log('=================================');
+      logDevelopmentOtp(email, otp);
       return 'console';
     }
     return false;
@@ -57,14 +80,12 @@ const sendOtpEmail = async (email, otp) => {
 };
 
 const sendNotificationEmail = async (email, name, subject, message) => {
-  if (!process.env.SMTP_HOST || !process.env.SMTP_USER) return false;
   try {
-    await transporter.sendMail({
-      from: `\"Fixnest\" <${process.env.SMTP_USER}>`, to: email,
+    return await sendEmail({
+      to: email,
       subject: `Fixnest: ${subject}`,
       text: `Hi${name ? ` ${name}` : ''},\n\n${message}\n\nSign in to Fixnest to view your booking details.`,
     });
-    return true;
   } catch (error) {
     console.error('Booking notification email failed:', error.message);
     return false;
