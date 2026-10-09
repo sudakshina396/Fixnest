@@ -7,6 +7,11 @@ const { sendOtpEmail } = require('../utils/email');
 
 const generateOtp = () => crypto.randomInt(100000, 1000000).toString();
 const normalizeEmail = (email) => typeof email === 'string' ? email.trim().toLowerCase() : '';
+const createSession = (user) => ({
+  success: true,
+  token: jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' }),
+  user: { id: user._id, email: user.email, name: user.name || user.email, role: user.role },
+});
 
 const issueOtp = async (email, flow, context = {}) => {
   const existingOtp = await Otp.findOne({ email });
@@ -38,7 +43,7 @@ const issueOtp = async (email, flow, context = {}) => {
     status: 200,
     body: {
       success: true,
-      message: 'Password verified. Enter the email verification code to continue.',
+      message: 'A verification code has been sent to your email.',
       delivery: emailSent,
     },
   };
@@ -75,7 +80,7 @@ exports.signupSendOtp = async (req, res) => {
   }
 };
 
-exports.loginSendOtp = async (req, res) => {
+exports.login = async (req, res) => {
   try {
     const email = normalizeEmail(req.body.email);
     const password = req.body.password;
@@ -89,26 +94,17 @@ exports.loginSendOtp = async (req, res) => {
     const user = await User.findOne({ email }).select('+passwordHash');
     if (!user) return res.status(404).json({ success: false, message: 'Account not available. Please sign up first.' });
 
-    let flow = 'login';
-    let passwordHash;
-    if (user.passwordHash) {
-      if (!await bcrypt.compare(password, user.passwordHash)) {
-        return res.status(401).json({ success: false, message: 'Invalid email or password.' });
-      }
-    } else {
-      // Existing OTP-only accounts must set a password; the email OTP verifies ownership.
-      if (password.length < 8) {
-        return res.status(400).json({ success: false, message: 'Set a password with at least 8 characters to continue.' });
-      }
-      flow = 'set-password';
-      passwordHash = await bcrypt.hash(password, 12);
+    if (!user.passwordHash || !await bcrypt.compare(password, user.passwordHash)) {
+      return res.status(401).json({ success: false, message: 'Invalid email or password.' });
+    }
+    if (!user.isActive) {
+      return res.status(403).json({ success: false, message: 'This account is disabled. Contact support.' });
     }
 
-    const result = await issueOtp(email, flow, passwordHash ? { passwordHash } : {});
-    return res.status(result.status).json(result.body);
+    return res.status(200).json(createSession(user));
   } catch (error) {
-    console.error('Login OTP request failed:', error.message);
-    return res.status(500).json({ success: false, message: 'Could not start sign-in. Please try again.' });
+    console.error('Login failed:', error.message);
+    return res.status(500).json({ success: false, message: 'Could not sign in. Please try again.' });
   }
 };
 
@@ -185,51 +181,23 @@ exports.verifyOtp = async (req, res) => {
       return res.status(200).json({ success: true, message: 'Password updated. You can now sign in with your new password.' });
     }
 
-    let user;
-    if (otpRecord.flow === 'signup') {
-      if (await User.exists({ email })) {
-        await Otp.deleteOne({ _id: otpRecord._id });
-        return res.status(409).json({ success: false, message: 'An account already exists. Log in instead.' });
-      }
-      user = await User.create({
-        email,
-        name: otpRecord.name,
-        phone: otpRecord.phone,
-        passwordHash: otpRecord.passwordHash,
-      });
-    } else if (otpRecord.flow === 'admin-login') {
-      const adminEmail = normalizeEmail(process.env.ADMIN_EMAIL);
-      if (!adminEmail || email !== adminEmail) {
-        return res.status(401).json({ success: false, message: 'Admin verification could not be completed.' });
-      }
-      user = await User.findOne({ email });
-      if (!user) user = await User.create({ email, role: 'admin' });
-      else if (user.role !== 'admin') {
-        user.role = 'admin';
-        await user.save();
-      }
-    } else {
-      user = await User.findOne({ email }).select('+passwordHash');
-      if (!user || user.role === 'admin') {
-        await Otp.deleteOne({ _id: otpRecord._id });
-        return res.status(401).json({ success: false, message: 'This account cannot complete customer sign-in.' });
-      }
-      if (otpRecord.flow === 'set-password') {
-        user.passwordHash = otpRecord.passwordHash;
-        await user.save();
-      } else if (otpRecord.flow !== 'login' || !user.passwordHash) {
-        await Otp.deleteOne({ _id: otpRecord._id });
-        return res.status(401).json({ success: false, message: 'Sign-in verification is no longer valid. Start again.' });
-      }
+    if (otpRecord.flow !== 'signup') {
+      await Otp.deleteOne({ _id: otpRecord._id });
+      return res.status(410).json({ success: false, message: 'Email-code sign-in has been removed. Sign in with your password.' });
     }
+    if (await User.exists({ email })) {
+      await Otp.deleteOne({ _id: otpRecord._id });
+      return res.status(409).json({ success: false, message: 'An account already exists. Log in instead.' });
+    }
+    const user = await User.create({
+      email,
+      name: otpRecord.name,
+      phone: otpRecord.phone,
+      passwordHash: otpRecord.passwordHash,
+    });
 
     await Otp.deleteOne({ _id: otpRecord._id });
-    const token = jwt.sign({ userId: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '7d' });
-    return res.status(200).json({
-      success: true,
-      token,
-      user: { id: user._id, email: user.email, name: user.name, role: user.role },
-    });
+    return res.status(200).json(createSession(user));
   } catch (error) {
     console.error('OTP verification failed:', error.message);
     return res.status(500).json({ success: false, message: 'Could not verify the code. Please try again.' });
@@ -245,7 +213,7 @@ exports.adminLogin = async (req, res) => {
       return res.status(503).json({ success: false, message: 'Admin sign-in is not configured.' });
     }
 
-    const admin = await User.findOne({ email: adminEmail, role: 'admin' }).select('+passwordHash');
+    let admin = await User.findOne({ email: adminEmail }).select('+passwordHash');
     // Deployment configuration is the source of truth for the configured admin account.
     const passwordHash = process.env.ADMIN_PASSWORD_HASH || admin?.passwordHash;
     if (!passwordHash) return res.status(503).json({ success: false, message: 'Admin sign-in is not configured.' });
@@ -255,8 +223,11 @@ exports.adminLogin = async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password.' });
     }
 
-    const result = await issueOtp(adminEmail, 'admin-login');
-    return res.status(result.status).json(result.body);
+    if (!admin) admin = new User({ email: adminEmail });
+    admin.role = 'admin';
+    if (process.env.ADMIN_PASSWORD_HASH) admin.passwordHash = process.env.ADMIN_PASSWORD_HASH;
+    await admin.save();
+    return res.status(200).json(createSession(admin));
   } catch (error) {
     console.error('Admin sign-in failed:', error.message);
     return res.status(500).json({ success: false, message: 'Could not start admin sign-in. Please try again.' });

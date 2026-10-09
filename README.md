@@ -86,7 +86,7 @@ Fixnest/
 
 ### Admin account
 
-Set `ADMIN_EMAIL` and a bcryptjs `ADMIN_PASSWORD_HASH` in `server/.env` for the one account that should manage the service catalog. Sign in using the **Admin** option on `/login`; this password flow does not depend on SMTP. A verified OTP login for the same email also receives the `admin` role. The account can open **Manage services** from the header to add catalog entries. Other new accounts remain customers.
+Set `ADMIN_EMAIL` and a bcryptjs `ADMIN_PASSWORD_HASH` in `server/.env` for the one account that should manage the service catalog. Sign in using the **Admin** option on `/login` with that email and password. The account can open **Manage services** from the header to add catalog entries. Other new accounts remain customers.
 
 Service photos are stored as small data URLs in MongoDB for this MVP; admin uploads are limited to 1 MB. Customers can open a service card, review its details and price, and submit a booking request after signing in.
 
